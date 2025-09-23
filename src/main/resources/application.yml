@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: FileStore
+  servlet:
+    multipart:
+      max-file-size: 2684354560
+      max-request-size: 2684354560
+
+storage:
+  location: ${user.home}/api/uploads
+
+# Add actuator configuration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+    info:
+      enabled: true
+  info:
+    env:
+      enabled: true
+    java:
+      enabled: true
+    build:
+      enabled: true
+
