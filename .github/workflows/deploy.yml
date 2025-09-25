@@ -42,8 +42,9 @@ jobs:
       run: ls -R
        
     - name: Build WAR file
-       echo "Build WAR File"
-      run: mvn clean package -DskipTests
+      run: |
+        echo "Building WAR File"
+        mvn clean package -DskipTests
       
     - name: Verify WAR file
       run: |
