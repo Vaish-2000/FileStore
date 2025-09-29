@@ -1,0 +1,158 @@
+name: Deploy to Tomcat
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+  # fail-fast removed; not valid at job level
+    env:
+      TOMCAT_URL: ${{ secrets.TOMCAT_URL }}
+      TOMCAT_USERNAME: ${{ secrets.TOMCAT_USERNAME }}
+      TOMCAT_PASSWORD: ${{ secrets.TOMCAT_PASSWORD }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    - name: Print Java and Maven version
+      run: |
+        java -version
+        mvn -version
+
+    - name: Cache Maven dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+
+    - name: Build WAR file
+      run: mvn -B clean package -DskipTests
+
+    - name: List target directory
+      run: ls -la target
+
+    - name: Verify WAR file
+      run: |
+        if [ -f "target/filestore.war" ]; then
+          echo "✅ WAR file created successfully"
+          ls -la target/filestore.war
+        else
+          echo "❌ WAR file not found"
+          exit 1
+        fi
+
+    - name: Test Tomcat connectivity
+      run: |
+        echo "Testing connection to Tomcat server..."
+        if curl -s --connect-timeout 10 "$TOMCAT_URL/manager/text/list" -u "$TOMCAT_USERNAME:$TOMCAT_PASSWORD" > /dev/null; then
+          echo "✅ Tomcat is accessible"
+        else
+          echo "❌ Cannot connect to Tomcat"
+          echo "Please check your TOMCAT_URL, TOMCAT_USERNAME, and TOMCAT_PASSWORD secrets"
+          exit 1
+        fi
+
+    - name: Check existing deployment
+      id: check_deployment
+      run: |
+        echo "Checking if application is already deployed..."
+        if curl -s -u "$TOMCAT_USERNAME:$TOMCAT_PASSWORD" "$TOMCAT_URL/manager/text/list" | grep -q "filestore:running"; then
+          echo "existing=true" >> $GITHUB_OUTPUT
+          echo "⚠️ Application 'filestore' is already deployed and running"
+        else
+          echo "existing=false" >> $GITHUB_OUTPUT
+          echo "✅ No existing deployment found"
+        fi
+
+    - name: Undeploy existing application
+      if: steps.check_deployment.outputs.existing == 'true'
+      run: |
+        echo "Undeploying existing application..."
+        UNDEPLOY_RESPONSE=$(curl -s -u "$TOMCAT_USERNAME:$TOMCAT_PASSWORD" "$TOMCAT_URL/manager/text/undeploy?path=/filestore")
+        if echo "$UNDEPLOY_RESPONSE" | grep -q "OK"; then
+          echo "✅ Application undeployed successfully"
+          sleep 5  # Wait for undeploy to complete
+        else
+          echo "❌ Failed to undeploy existing application"
+          echo "Response: $UNDEPLOY_RESPONSE"
+          exit 1
+        fi
+
+    - name: Deploy to Tomcat
+      run: |
+        echo "🚀 Deploying WAR file to Tomcat..."
+        DEPLOY_RESPONSE=$(curl -s -T "target/filestore.war" -u "$TOMCAT_USERNAME:$TOMCAT_PASSWORD" "$TOMCAT_URL/manager/text/deploy?path=/filestore")
+        if echo "$DEPLOY_RESPONSE" | grep -q "OK"; then
+          echo "✅ Deployment successful!"
+          echo ""
+          echo "🎉 FileStore is now available at:"
+          echo "   $TOMCAT_URL/filestore/"
+          echo ""
+          echo " Health check:"
+          echo "   $TOMCAT_URL/filestore/actuator/health"
+          echo ""
+          echo "ℹ️  Application info:"
+          echo "   $TOMCAT_URL/filestore/actuator/info"
+        else
+          echo "❌ Deployment failed!"
+          echo "Response: $DEPLOY_RESPONSE"
+          exit 1
+        fi
+
+    - name: Verify deployment
+      run: |
+        echo "🔍 Verifying deployment..."
+        sleep 10  # Wait for application to start
+        # Test health endpoint
+        if curl -s --connect-timeout 30 "$TOMCAT_URL/filestore/actuator/health" | grep -q "UP"; then
+          echo "✅ Health check passed - Application is running"
+        else
+          echo "⚠️ Health check failed or application is still starting"
+          echo "Application may take a few minutes to fully start"
+        fi
+        # Test main endpoint
+        if curl -s --connect-timeout 10 "$TOMCAT_URL/filestore/" > /dev/null; then
+          echo "✅ Main application endpoint is accessible"
+        else
+          echo "⚠️ Main application endpoint not yet accessible"
+        fi
+
+    - name: Deployment Summary
+      run: |
+        echo "## 🎉 Deployment Complete!"
+        echo ""
+        echo "### Application URLs:"
+        echo "- **Main Application**: $TOMCAT_URL/filestore/"
+        echo "- **Health Check**: $TOMCAT_URL/filestore/actuator/health"
+        echo "- **Application Info**: $TOMCAT_URL/filestore/actuator/info"
+        echo ""
+        echo "### Configuration:"
+        echo "- **Upload Directory**: \${user.home}/api/uploads"
+        echo "- **Max File Size**: 2.5GB"
+        echo "- **Java Version**: 21+"
+        echo "- **Tomcat Version**: 10.x+"
+        echo ""
+        echo "### Next Steps:"
+        echo "1. Test file upload functionality"
+        echo "2. Monitor application logs in Tomcat"
+        echo "3. Configure firewall if needed"
+        echo "4. Set up SSL/HTTPS for production"
